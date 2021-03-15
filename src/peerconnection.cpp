@@ -690,6 +690,11 @@ std::shared_ptr<Track> PeerConnection::getTrackFromSsrc(uint32_t ssrc) {
 	return nullptr;
 }
 
+void PeerConnection::setMediaDistributor(std::shared_ptr<MediaDistributor> distributor) {
+	std::shared_lock lock(mMediaDistributorLock);
+	mMediaDistributor = distributor;
+}
+
 std::shared_ptr<MediaDistributor> PeerConnection::mediaDistributor() {
 	std::shared_lock lock(mMediaDistributorLock);
 	return mMediaDistributor;
