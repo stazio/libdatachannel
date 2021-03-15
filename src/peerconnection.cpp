@@ -24,6 +24,7 @@
 #include "processor.hpp"
 #include "threadpool.hpp"
 #include "rtp.hpp"
+#include "mediadistributor.hpp"
 
 #include "dtlstransport.hpp"
 #include "icetransport.hpp"
@@ -48,15 +49,10 @@ inline std::shared_ptr<To> reinterpret_pointer_cast(std::shared_ptr<From> const 
 using std::reinterpret_pointer_cast;
 #endif
 
-static rtc::LogCounter COUNTER_MEDIA_TRUNCATED(plog::warning,
-                                               "Number of RTP packets truncated over past second");
 static rtc::LogCounter
     COUNTER_SRTP_DECRYPT_ERROR(plog::warning, "Number of SRTP decryption errors over past second");
 static rtc::LogCounter
     COUNTER_SRTP_ENCRYPT_ERROR(plog::warning, "Number of SRTP encryption errors over past second");
-static rtc::LogCounter
-    COUNTER_UNKNOWN_PACKET_TYPE(plog::warning,
-                                "Number of unknown RTCP packet types over past second");
 
 namespace rtc {
 
@@ -408,6 +404,12 @@ void PeerConnection::onTrack(std::function<void(std::shared_ptr<Track>)> callbac
 }
 
 shared_ptr<IceTransport> PeerConnection::initIceTransport() {
+	{
+		std::lock_guard lock(mMediaDistributorLock);
+		if (!mMediaDistributor) {
+			mMediaDistributor = std::make_shared<rtc::DefaultRTCPMediaDistributor>(shared_from_this());
+		}
+	}
 	try {
 		if (auto transport = std::atomic_load(&mIceTransport))
 			return transport;
@@ -678,80 +680,26 @@ void PeerConnection::forwardMessage(message_ptr message) {
 	channel->incoming(message);
 }
 
+std::shared_ptr<Track> PeerConnection::getTrackFromSsrc(uint32_t ssrc) {
+	std::shared_lock lock(mTracksMutex); // read-only
+	auto mid = getMidFromSsrc(ssrc);
+	if (mid) {
+		if (auto track = mTracks.find(*mid); track != mTracks.end())
+			return track->second.lock();
+	}
+	return nullptr;
+}
+
+std::shared_ptr<MediaDistributor> PeerConnection::mediaDistributor() {
+	std::shared_lock lock(mMediaDistributorLock);
+	return mMediaDistributor;
+}
+
 void PeerConnection::forwardMedia(message_ptr message) {
 	if (!message)
 		return;
 
-	// Browsers like to compound their packets with a random SSRC.
-	// we have to do this monstrosity to distribute the report blocks
-	if (message->type == Message::Control) {
-		std::set<uint32_t> ssrcs;
-		size_t offset = 0;
-		while ((sizeof(rtc::RTCP_HEADER) + offset) <= message->size()) {
-			auto header = reinterpret_cast<rtc::RTCP_HEADER *>(message->data() + offset);
-			if (header->lengthInBytes() > message->size() - offset) {
-				COUNTER_MEDIA_TRUNCATED++;
-				break;
-			}
-			offset += header->lengthInBytes();
-			if (header->payloadType() == 205 || header->payloadType() == 206) {
-				auto rtcpfb = reinterpret_cast<RTCP_FB_HEADER *>(header);
-				ssrcs.insert(rtcpfb->getPacketSenderSSRC());
-				ssrcs.insert(rtcpfb->getMediaSourceSSRC());
-
-			} else if (header->payloadType() == 200 || header->payloadType() == 201) {
-				auto rtcpsr = reinterpret_cast<RTCP_SR *>(header);
-				ssrcs.insert(rtcpsr->senderSSRC());
-				for (int i = 0; i < rtcpsr->header.reportCount(); ++i)
-					ssrcs.insert(rtcpsr->getReportBlock(i)->getSSRC());
-			} else if (header->payloadType() == 202) {
-                continue;
-				auto sdes = reinterpret_cast<RTCP_SDES *>(header);
-				if (!sdes->isValid()) {
-					PLOG_WARNING << "RTCP SDES packet is invalid";
-					continue;
-				}
-				for (unsigned int i = 0; i < sdes->chunksCount(); i++) {
-					auto chunk = sdes->getChunk(i);
-					ssrcs.insert(chunk->ssrc());
-				}
-			} else {
-				// PT=207 == Extended Report
-				if (header->payloadType() != 207) {
-					COUNTER_UNKNOWN_PACKET_TYPE++;
-				}
-			}
-		}
-
-		if (!ssrcs.empty()) {
-			for (uint32_t ssrc : ssrcs) {
-				if (auto mid = getMidFromSsrc(ssrc)) {
-					std::shared_lock lock(mTracksMutex); // read-only
-					if (auto it = mTracks.find(*mid); it != mTracks.end())
-						if (auto track = it->second.lock())
-							track->incoming(message);
-				}
-			}
-			return;
-		}
-	}
-
-	uint32_t ssrc = uint32_t(message->stream);
-	if (auto mid = getMidFromSsrc(ssrc)) {
-		std::shared_lock lock(mTracksMutex); // read-only
-		if (auto it = mTracks.find(*mid); it != mTracks.end())
-			if (auto track = it->second.lock())
-				track->incoming(message);
-	} else {
-		/*
-		 * TODO: So the problem is that when stop sending streams, we stop getting report blocks for
-		 * those streams Therefore when we get compound RTCP packets, they are empty, and we can't
-		 * forward them. Therefore, it is expected that we don't know where to forward packets. Is
-		 * this ideal? No! Do I know how to fix it? No!
-		 */
-		// PLOG_WARNING << "Track not found for SSRC " << ssrc << ", dropping";
-		return;
-	}
+	mediaDistributor()->process(message);
 }
 
 std::optional<std::string> PeerConnection::getMidFromSsrc(uint32_t ssrc) {

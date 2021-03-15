@@ -47,6 +47,7 @@ class Processor;
 class IceTransport;
 class DtlsTransport;
 class SctpTransport;
+class MediaDistributor;
 
 using certificate_ptr = std::shared_ptr<Certificate>;
 using future_certificate_ptr = std::shared_future<certificate_ptr>;
@@ -107,6 +108,9 @@ public:
 	void setRemoteDescription(Description description);
 	void addRemoteCandidate(Candidate candidate);
 
+	std::shared_ptr<MediaDistributor> mediaDistributor();
+	void setMediaDistributor(std::shared_ptr<MediaDistributor> distributor);
+
 	std::shared_ptr<DataChannel> addDataChannel(string label, DataChannelInit init = {});
 
 	// Equivalent to calling addDataChannel() and setLocalDescription()
@@ -128,6 +132,8 @@ public:
 	// Track media support requires compiling with libSRTP
 	std::shared_ptr<Track> addTrack(Description::Media description);
 	void onTrack(std::function<void(std::shared_ptr<Track> track)> callback);
+
+	std::shared_ptr<Track> getTrackFromSsrc(uint32_t ssrc);
 
 private:
 	std::shared_ptr<IceTransport> initIceTransport();
@@ -187,6 +193,9 @@ private:
 	std::unordered_map<string, std::weak_ptr<Track>> mTracks;               // by mid
 	std::vector<std::weak_ptr<Track>> mTrackLines;                          // by SDP order
 	std::shared_mutex mDataChannelsMutex, mTracksMutex;
+
+	std::shared_mutex mMediaDistributorLock;
+	std::shared_ptr<MediaDistributor> mMediaDistributor;
 
 	std::unordered_map<uint32_t, string> mMidFromSsrc; // cache
 

@@ -83,6 +83,7 @@ private:
 	std::shared_ptr<RtcpHandler> mRtcpHandler;
 
 	friend class PeerConnection;
+	friend class MediaDistributor;
 };
 
 } // namespace rtc
