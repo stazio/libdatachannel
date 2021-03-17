@@ -238,7 +238,6 @@ struct RTCP_SR {
 	RTCP_HEADER header;
 	SSRC _senderSSRC;
 
-private:
 	uint64_t _ntpTimestamp;
 	uint32_t _rtpTimestamp;
 	uint32_t _packetCount;
@@ -246,7 +245,6 @@ private:
 
 	RTCP_ReportBlock _reportBlocks;
 
-public:
 	inline void preparePacket(SSRC senderSSRC, uint8_t reportCount) {
 		unsigned int length =
 		    ((sizeof(header) + 24 + reportCount * sizeof(RTCP_ReportBlock)) / 4) - 1;
