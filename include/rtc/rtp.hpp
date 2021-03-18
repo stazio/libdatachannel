@@ -46,15 +46,13 @@ typedef uint32_t SSRC;
 #pragma pack(push, 1)
 
 struct RTP {
-private:
 	uint8_t _first;
 	uint8_t _payloadType;
 	uint16_t _seqNumber;
 	uint32_t _timestamp;
 	SSRC _ssrc;
 
-public:
-	SSRC csrc[16];
+	SSRC csrc[0];
 
 	inline uint8_t version() const { return _first >> 6; }
 	inline bool padding() const { return (_first >> 5) & 0x01; }
@@ -67,16 +65,15 @@ public:
 	inline uint32_t ssrc() const { return ntohl(_ssrc); }
 
 	inline size_t getSize() const {
-		return reinterpret_cast<const char *>(&csrc) - reinterpret_cast<const char *>(this) +
-		       sizeof(SSRC) * csrcCount();
+        return sizeof(RTP) + sizeof(SSRC)*csrcCount();
 	}
 
 	[[nodiscard]] char *getBody() {
-		return reinterpret_cast<char *>(&csrc) + sizeof(SSRC) * csrcCount();
+		return (char*) this + sizeof(RTP) + (sizeof(SSRC) * csrcCount());
 	}
 
 	[[nodiscard]] const char *getBody() const {
-		return reinterpret_cast<const char *>(&csrc) + sizeof(SSRC) * csrcCount();
+		return (const char*) this + sizeof(RTP) + (sizeof(SSRC) * csrcCount());
 	}
 
 	inline void preparePacket() { _first |= (1 << 7); }
@@ -698,9 +695,9 @@ public:
 		header.setSeqNumber(getOriginalSeqNo());
 		header.setSsrc(originalSSRC);
 		header.setPayloadType(originalPayloadType);
-		// TODO, the -12 is the size of the header (which is variable!)
 		memmove(header.getBody(), getBody(), totalSize - getSize());
-		return totalSize - getSize();
+		return totalSize - sizeof(uint16_t); //2 bytes were removed from the beginning of the payload. 
+                                             //This was the original seqno.
 	}
 };
 
